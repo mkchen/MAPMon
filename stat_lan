@@ -1,0 +1,62 @@
+#!/bin/sh
+
+# cat temp.lan | gawk '
+
+CE=2403:9200:fffe::65
+LANPRV=192.168.1/24
+
+ssh root@$CE "/usr/sbin/tcpdump -ttSni br-lan src net $LANPRV" | awk '
+  BEGIN {
+	secondago = 0;
+	now = systime(); timediff = 0; 
+  }
+  $6 ~ /Flags/ {
+	if (timediff == 0) timediff = now - $1; 
+	tm = $1 + timediff; 
+	src = $3; dst = $5;
+	match(src, /([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)/, a); 
+	sa = a[1]; sp = a[2];
+	match(dst, /([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)/, a); 
+	da = a[1]; dp = a[2];
+	match($7, /\[([.SFPR ]+)\]/, a);
+	fl = a[1];
+	printf("%9.6f ", tm); 
+	print sa, sp, da, dp, fl;
+
+	s[src, dst] = tm;
+	if (fl ~ /[F]/) {
+		delete s[src, dst]; 
+	}
+			
+	if (tm - secondago > 1) {
+		for (srcdst in s) {
+			split(srcdst, b, SUBSEP);
+			ssrc = b[1]; sdst = b[2]; 
+			match(ssrc, /([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)/, a); 
+			ssa = a[1]; ssp = a[2];
+			match(sdst, /([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+)\.([0-9]+)/, a); 
+			sda = a[1]; sdp = a[2];
+		
+			if (tm - s[ssrc, sdst] > 600) {
+				delete s[ssrc, sdst];
+				u[ssa]--; if (u[ssa] == 0) delete u[ssa];
+				v[sda]--; if (v[sda] == 0) delete v[sda];
+			} else {
+				u[ssa] = (ssa in u)?(u[ssa] + 1):1; 
+				v[sda] = (sda in u)?(v[sda] + 1):1; 
+			}
+		}
+		out = strftime("%Y%m%d") ".lan.bysec" ;
+		printf("%9.6f ", tm) >> out; 
+		print length(u), length(v), length(s) >> out; fflush(out);
+		secondago = tm;
+		delete u; delete v; 
+	} 
+  }
+  END {
+	for (s in ss) {
+		print s; 
+	}
+	print length(ss);
+  }'
+

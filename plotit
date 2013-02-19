@@ -1,0 +1,163 @@
+#!/bin/bash
+
+SSID=$1
+# IDIR=`pwd`
+IDIR=/home/M/development
+cd $IDIR
+
+USAGE="Usage: plotit ssid [-d {all|day|hour}] [yyyy-mm-dd [HH:MM]]"
+echo $SSID
+
+DATE=0
+DURA=3600
+PLMT=64 # port limitation for display
+
+dt=`echo $* | sed "s/$SSID/ /" | gawk --re-interval '
+	BEGIN { OK = 0; }
+	{ 
+		if (match($0, /([0-9]{4}-[0-9]{2}-[0-9]{2})( [0-9]{2}:[0-9]{2})?$/, a)) { print a[1] " "  a[2]; OK = 1; }
+	}
+	END { 	
+		if (! OK) print "NA"; 
+	}'`
+
+dr=`echo $* | gawk --re-interval '
+	BEGIN { OK = 0; }
+	{
+		if (match($0, /-d (all|day|4h|hour|15m|5m|min)/, a)) {
+			if (a[1] == "all") print 0; 
+			else if (a[1] == "day") print 86400; 
+			else if (a[1] == "4h") print 14400; 
+			else if (a[1] == "hour") print 3600; 
+			else if (a[1] == "15m") print 900; 
+			else if (a[1] == "5m") print 300; 
+			else if (a[1] == "min") print 60; 
+			OK = 1;
+		} 
+	}
+	END { 	
+		if (! OK) print "NA"; 
+	}'`
+
+echo $dt $dr $#
+
+if [ $dr == "NA" -a "$dt" == "NA" -a $# -gt 1 ]; then 
+	echo $USAGE
+	exit 
+elif [ $dr == "NA" -o "$dt" == "NA" ]; then 
+	if [ $# -gt 3 ]; then 
+		echo $USAGE
+		exit 
+	fi
+fi
+if [ $dr != "NA" ]; then
+	DURA=$dr
+fi
+if [ "$dt" != "NA" ]; then
+	DATE="$dt"
+fi 
+
+MINF=`ls 201*.wan.bysec | awk -F. '{ print $1 }' | sort | head -n 1` 
+MINF=`date -d $MINF +%s`
+MAXF=`ls 201*.wan.bysec | awk -F. '{ print $1 }' | sort | tail -n 1` 
+MAXF=$(( `date -d $MAXF +%s` + 86400 ))
+if [ "$DATE" == "0" ]; then 
+	END=`date +%s`
+	if [ $DURA -eq 0 ]; then
+		START=$MINF
+	else 
+		START=$(( END - DURA ))
+	fi
+else 
+	START=`date -d "$DATE" +%s`
+	if [ $MINF -gt $START ]; then 
+		START=$MINF
+	fi
+	if [ $DURA -eq 0 ]; then
+		END=$MAXF
+	else 
+		END=$(( START + DURA ))
+	fi
+fi
+
+if [ $MINF -gt $START ]; then 
+	START=$MINF
+fi
+if [ $MAXF -lt $END ]; then 
+	END=$MAXF
+fi
+
+export START
+export END
+
+SDATE=`date -d @${START} +%Y%m%d`
+EDATE=`date -d @${END} +%Y%m%d`
+echo "DATE/DURA/START/END:" $SDATE $EDATE $DURA $START $END
+
+WANT=/tmp/$SSID.wan.temp
+LANT=/tmp/$SSID.lan.temp
+TEMP=/tmp/$SSID.temp
+for i in `ls 201*.wan.bysec | awk -F. '{ print $1 }'`; do 
+	if [ $i -ge $SDATE -a $i -le $EDATE ]; then
+		WANF=$i.wan.bysec
+		cat $WANF | awk '($1 > ENVIRON["START"] && $1 < ENVIRON["END"]) { printf("%d ", $1); print $2, $3, $4, $5 }' >> $WANT
+	fi
+done
+
+for i in `ls 201*.lan.bysec | awk -F. '{ print $1 }'`; do 
+	if [ $i -ge $SDATE -a $i -le $EDATE ]; then
+		LANF=$i.lan.bysec
+		cat $LANF | awk '($1 > ENVIRON["START"] && $1 < ENVIRON["END"]) { printf("%d ", $1); print $2, $3, $4, $5 }' >> $LANT
+	fi
+done
+
+join -1 1 -2 1 $LANT $WANT > $TEMP
+
+ODIR=/var/www/html/data
+SCRP=/tmp/$SSID.R
+XLAB="time (`date -d @${START}` ~ `date -d @${END}`)"
+EPSS=$ODIR/$SSID.s.eps
+EPSA=$ODIR/$SSID.a.eps
+
+if [ `wc $TEMP | awk '{ print $1; }'` -eq 0 ]; then
+	echo "NO DATA IN THE SELECTED DURATION"
+	exit
+fi
+
+echo "data <- read.table(\"$TEMP\")" > $SCRP
+echo "postscript(\"$EPSS\", height = 10, width = 16)" >> $SCRP
+echo "ymax = max(data[,4])" >> $SCRP
+echo "cols <- c('black', 'red', 'blue', 'magenta')" >> $SCRP
+echo "ltys <- c(3, 1, 2, 1)" >> $SCRP
+echo "lwds <- c(2, 2, 2, .5)" >> $SCRP
+echo "legends <- c('# of original sessions', '# of WAN 5-tuples', '# of ports in use', '# of connected dst addr')" >> $SCRP
+echo "plot(V4 ~ V1, data=data, type='s', lty=ltys[1], col=cols[1], xlab='$XLAB', ylab='sessions', xlim=c($START, $END), ylim=c(0,ymax))" >> $SCRP
+echo "lines(V7 ~ V1, data=data, type='s', lty=ltys[2], col=cols[2], lwd=lwds[2])" >> $SCRP
+echo "lines(V6 ~ V1, data=data, type='s', lty=ltys[4], col=cols[4], lwd=lwds[4])" >> $SCRP
+# echo "lines(V5 ~ V1, data=data, type='s', lty=ltys[3], col=cols[3], lwd=lwds[3])" >> $SCRP
+# enlarge port show and put ordinate on right side
+echo "par(new=T)" >> $SCRP
+echo "plot(V5 ~ V1, data=data, type='s', lty=ltys[3], col=cols[3], lwd=lwds[3], xaxt='n', yaxt='n', xlab='', ylab='', xlim=c($START, $END), ylim=c(0, $PLMT))" >> $SCRP
+echo "axis(side=4, col.ticks='blue', lwd.ticks=2)" >> $SCRP
+# echo "mtext('consumed port', side=4, line=-1, outer=T)" >> $SCRP
+# end of enlarge ... M@11:02 Feb 13 2013
+echo "legend('topright', legend = legends, col = cols, lty = ltys, lwd = lwds)" >> $SCRP
+echo "dev.off()" >> $SCRP
+echo "postscript(\"$EPSA\", height = 10, width = 16)" >> $SCRP
+echo "ymax = max(data[,3])" >> $SCRP
+echo "cols <- c('black', 'magenta', 'orange', 'blue')" >> $SCRP
+echo "ltys <- c(3, 1, 1, 1)" >> $SCRP
+echo "lwds <- c(2, 2, 2, 2)" >> $SCRP
+echo "legends <- c('# of requested dst addr', '# of connected dst adddr', '# of forced recycles in sec', '# of src addresses')" >> $SCRP
+echo "plot(V3 ~ V1, data=data, type='s', lty=ltys[1], col=cols[1], xlab='$XLAB', ylab='addresses', xlim=c($START, $END), ylim=c(0,ymax))" >> $SCRP
+echo "lines(V6 ~ V1, data=data, type='s', lty=ltys[2], col=cols[2], lwd=lwds[2])" >> $SCRP
+echo "lines(V8 ~ V1, data=data, type='s', lty=ltys[3], col=cols[3], lwd=lwds[3])" >> $SCRP
+echo "lines(V2 ~ V1, data=data, type='s', lty=ltys[4], col=cols[4], lwd=lwds[4])" >> $SCRP
+echo "legend('topright', legend = legends, col = cols, lty = ltys, lwd = lwds)" >> $SCRP
+
+R --vanilla < $SCRP 
+
+convert -rotate 90 $EPSS $ODIR/$SSID.s.png
+convert -rotate 90 $EPSA $ODIR/$SSID.a.png
+
+rm -rf $SCRP $WANT $LANT $TEMP $EPSS $EPSA
