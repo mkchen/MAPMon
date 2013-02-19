@@ -101,6 +101,7 @@ where,
 	  the destinations
 	. number of port in use for the public address of the CE
 	. number of actually connected destination addresses, for comparison. 
+
   xxxx.a.png
 	the graph for the address behaviours within the specified duration 
 	since the specified date or until now. Address behaviours include: 
